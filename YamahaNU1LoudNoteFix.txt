@@ -1,0 +1,131 @@
+{***********************************************
+Yamaha NU1 Loud Note Fix
+Author: Herq
+Modified: 2019-06-05
+*************************************************}
+
+on init
+	
+	set_script_title("Yamaha NU1 Loud Note Fix")
+	set_ui_height(5)
+	message("")
+	
+	declare !note_names[12]
+	!note_names[0] := "C"
+	!note_names[1] := "Db"
+	!note_names[2] := "D"
+	!note_names[3] := "Eb"
+	!note_names[4] := "E"
+	!note_names[5] := "F"
+	!note_names[6] := "Gb"
+	!note_names[7] := "G"
+	!note_names[8] := "Ab"
+	!note_names[9] := "A"
+	!note_names[10] := "Bb"
+	!note_names[11] := "B"
+
+	declare ui_knob $max_dT (0,250,1)
+	declare ui_knob $min_dV (0,127,1)
+	declare ui_knob $gain (0,100,1)
+	set_text($max_dT,"Max dT")
+	set_text($min_dV,"Min dV")
+	set_text($gain,"Gain [%]")
+	move_control($gain,1,3)	
+	move_control($max_dT,1,5)
+	move_control($min_dV,1,7)
+	$max_dT := 120
+	$min_dV := 15
+	$gain := 80
+	make_persistent ($max_dT)
+	make_persistent ($min_dV)
+	make_persistent ($gain)
+	set_control_help($max_dT,"Max dT: Defines the time interval, in milliseconds, between prior note release and current note On that will be used to detect a loud note. Suggested: 120ms")
+	set_control_help($min_dV,"Min dV: Defines the minimum velocity different between consecutive notes that will be used to detect a loud note. Suggested: 15")
+	set_control_help($gain,"Gain: Defines how much velocity to correct when a loud note is detected. A gain of 100% plays the new note at the same velocity as the prior note, i.e. completely ignores the velocity of the loud note. A gain of 0% plays the new note without any correction, i.e., effectively doing nothing. Suggested: 80%")
+
+	declare ui_button $fix_enabled
+	set_text($fix_enabled,"Fix Enabled")
+	declare ui_button $clear_button
+	set_text($clear_button,"Clear Display")
+	
+	declare ui_label $display (4,8)
+	set_text ($display, "")
+	set_control_help($display,"Displays Note On events, velocity, delta velocity between current strike and prior strike of the same note, and delta time in milliseconds between current strike and prior release. Whenever a loud note is detected, the line will start with (*), with the original (uncorrected) velocity displayed in parenthesis.")
+	declare ui_label $display_label (4,1)
+	set_text ($display_label,"MIDI Monitor Display")
+	set_control_par(get_ui_id($display_label),$CONTROL_PAR_TEXT_ALIGNMENT,1)
+
+	$clear_button := 0
+	$fix_enabled := 1
+	
+	move_control ($display,2,2)
+	move_control ($display_label,2,1)
+	move_control ($clear_button,6,9)	
+	move_control ($fix_enabled,1,2)
+	
+	declare $new_vel
+	declare $a
+	declare %tableT[128]
+	declare %tableV[128]
+	declare $deltaT
+	declare $deltaV
+    $a := 1
+    while ($a < 128)
+        %tableT[$a] := $ENGINE_UPTIME
+        %tableV[$a] := 0
+        inc ($a)
+    end while
+
+end on
+
+on midi_in
+	
+	{Note Off}
+	if ($MIDI_COMMAND = $MIDI_COMMAND_NOTE_OFF)
+		{Store time when note is released}
+		%tableT[$MIDI_BYTE_1] := $ENGINE_UPTIME
+	end if			
+	
+	{Note On}
+	if ($MIDI_COMMAND = $MIDI_COMMAND_NOTE_ON and $MIDI_BYTE_2 > 0)
+			
+		if ($MIDI_BYTE_1 > 0)
+			{compute time difference, in milliseconds, between last time note was released and current time}
+			$deltaT := $ENGINE_UPTIME - %tableT[$MIDI_BYTE_1]
+			{compute velocity difference between last time note was pressed and current velocity}
+			$deltaV := $MIDI_BYTE_2 - %tableV[$MIDI_BYTE_1]
+			{compute new velocity value to be used if a loud note occurs}
+			if ($fix_enabled = 1)
+				$new_vel := %tableV[$MIDI_BYTE_1] + real_to_int( ((100.0-int_to_real($gain))/100.0) * int_to_real($deltaV) )
+				if ($new_vel>127)
+					$new_vel := 127
+				end if
+			else
+				$new_vel := $MIDI_BYTE_2
+			end if
+			
+			{store current velocity}			
+			%tableV[$MIDI_BYTE_1] := $MIDI_BYTE_2
+			
+			if ($deltaT < $max_dT and $deltaV > $min_dV)
+				add_text_line ($display, "(*) Note On: " & !note_names[$MIDI_BYTE_1 mod 12] & ($MIDI_BYTE_1 / 12) - 2 & "  (" & $MIDI_BYTE_1 & ")" & "   Velocity: " & $new_vel & " (" & $MIDI_BYTE_2 & ")   dV: " & $deltaV & "   dT: " & $deltaT)
+				set_event_par($EVENT_ID,$EVENT_PAR_MIDI_BYTE_2,$new_vel)
+			else
+				add_text_line ($display, "Note On: " & !note_names[$MIDI_BYTE_1 mod 12] & ($MIDI_BYTE_1 / 12) - 2 & "  (" & $MIDI_BYTE_1 & ")" & "   Velocity: " & $MIDI_BYTE_2 & "   dV: " & $deltaV & "   dT: " & $deltaT)
+			end if	
+		end if
+			
+	end if
+	
+	
+end on	
+
+on ui_control ($clear_button)
+	$clear_button := 0
+	set_text ($display,"")
+end on
+
+on ui_control ($fix_enabled)
+	set_text ($display,"")
+end on
+
